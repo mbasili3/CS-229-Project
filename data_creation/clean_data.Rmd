@@ -1,0 +1,270 @@
+---
+title: Assemble data
+author: Callan Hoskins
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Libraries
+library(tidyverse)
+library(lubridate)
+library(fs)
+
+# Parameters
+flights_sfo <- here::here("data_raw/flights_SFO_2019_2019.csv")
+weather_sfo_march <- here::here("data_raw/weather/weather_SFO_2019_3.csv")
+
+dir_flights <- here::here("data_raw/flights")
+dir_weather <- here::here("data_raw/weather")
+
+combined_path <- here::here("data_raw/full_data.csv")
+
+```
+
+```{r}
+flights_column_types <- 
+  cols_only(
+    `Carrier Code` = col_character(),
+    `Date (MM/DD/YYYY)` = col_date("%m/%d/%Y"),
+    `Flight Number` = col_double(),
+    `Tail Number` = col_character(),
+    `Destination Airport` = col_character(),
+    `Scheduled departure time` = col_time(format = "%H:%M"),
+    `Actual departure time` = col_time(format = "%H:%M"),
+    `Scheduled elapsed time (Minutes)` = col_double(),
+    `Actual elapsed time (Minutes)` = col_double(),
+    `Departure delay (Minutes)` = col_double(),
+    `Wheels-off time` = col_time(format = ""),
+    `Taxi-Out time (Minutes)` = col_double(),
+    `Delay Carrier (Minutes)` = col_double(),
+    `Delay Weather (Minutes)` = col_double(),
+    `Delay National Aviation System (Minutes)` = col_double(),
+    `Delay Security (Minutes)` = col_double(),
+    `Delay Late Aircraft Arrival (Minutes)` = col_double(),
+    origin = col_character()
+  )
+
+flights_column_names <- 
+  c(
+    "carrier_code" = "Carrier Code", 
+    "date" = "Date (MM/DD/YYYY)", 
+    "flight_no" = "Flight Number", 
+    "tail_no" = "Tail Number", 
+    "destination" = "Destination Airport", 
+    "time_scheduled_departure" = "Scheduled departure time", 
+    "time_actual_departure" = "Actual departure time", 
+    "elapsed_time_scheduled" = "Scheduled elapsed time (Minutes)", 
+    "elapsed_time_actual" = "Actual elapsed time (Minutes)", 
+    "departure_delay" = "Departure delay (Minutes)", 
+    "time_wheels_off" = "Wheels-off time", 
+    "time_taxi_out" = "Taxi-Out time (Minutes)", 
+    "delay_carrier" = "Delay Carrier (Minutes)", 
+    "delay_weather" = "Delay Weather (Minutes)", 
+    "delay_nas" = "Delay National Aviation System (Minutes)", 
+    "delay_security" = "Delay Security (Minutes)", 
+    "delay_late_aircraft" = "Delay Late Aircraft Arrival (Minutes)", 
+    "origin" = "origin"
+  )
+
+read_flight_data <- function(path) {
+  read_csv(path, col_types = flights_column_types) %>% 
+    select(!!! flights_column_names) %>% 
+    mutate(
+      time_scheduled_departure = (ymd(date) + hms(time_scheduled_departure)) %>% round_date("hour"), 
+      time_actual_departure = (ymd(date) + hms(time_actual_departure)) %>% round_date("hour")
+    ) %>% 
+    drop_na()
+}
+```
+
+```{r}
+weather_col_types <- 
+  cols_only(
+    Time = col_time(format = "%I:%M %p"),
+    Temperature = col_character(),
+    `Dew Point` = col_character(),
+    Humidity = col_character(),
+    Wind = col_character(),
+    `Wind Speed` = col_character(),
+    `Wind Gust` = col_character(),
+    Pressure = col_character(),
+    Precip. = col_character(),
+    Condition = col_character(),
+    origin = col_character(),
+    date = col_date("%m/%d/%Y")
+  )
+
+weather_col_names <- 
+  c(
+    "time" = "Time", 
+    "humidity" = "Humidity", 
+    "wind_direction" = "Wind", 
+    "wind_speed_mph" = "Wind Speed", 
+    "wind_gust_mph" = "Wind Gust", 
+    "pressure_in" = "Pressure", 
+    "precip_in" = "Precip.", 
+    "weather_condition" = "Condition", 
+    "origin" = "origin", 
+    "date" = "date"
+  )
+
+read_weather_data <- function(path) { 
+  read_csv(path, col_types = weather_col_types) %>% 
+    select(!!!weather_col_names) %>% 
+    mutate(
+      humidity = humidity %>% str_extract("\\d+") %>% as.integer(), 
+      wind_speed_mph = wind_speed_mph %>% str_extract("\\d+") %>% as.integer(), 
+      pressure_in = pressure_in %>% str_extract("[\\d\\.]+") %>% as.double(), 
+      precip_in = precip_in %>% str_extract("[\\d\\.]+") %>% as.double(), 
+      wind_gust_mph = wind_gust_mph %>% str_extract("\\d+") %>% as.integer(), 
+      time = (ymd(date) + hms(time)) %>% round_date("hour")
+    ) %>% 
+    select(-date)
+}
+```
+
+```{r output=FALSE}
+all_weather <- 
+  dir_weather %>% 
+  dir_ls() %>% 
+  map(read_weather_data) %>% 
+  bind_rows()
+```
+
+```{r message=FALSE}
+all_flight_data <- 
+  dir_ls(dir_flights) %>% 
+  map(read_flight_data) %>% 
+  bind_rows()
+```
+```{r}
+combined <- 
+  all_flight_data %>% 
+  inner_join(all_weather, by = c("time_scheduled_departure" = "time", "origin" = "origin")) %>% 
+  drop_na()
+```
+
+```{r}
+combined %>% 
+  write_csv(combined_path)
+```
+
+```{r}
+combined <- 
+  combined %>% 
+  mutate(
+    time = 
+      time_scheduled_departure %>% 
+      str_split(" ") %>%
+      map_chr(2) %>%
+      hms()
+  )
+```
+
+```{r}
+combined %>% 
+  ggplot(aes(time_wheels_off, time_taxi_out)) +
+  geom_point(alpha = 0.05) + 
+  labs(
+    x = "Departure time", 
+    y = "Taxi-out time (mins)", 
+    title = "Taxi-out time by departure time"
+  )
+
+combined %>% 
+  ggplot(aes(time_taxi_out)) + 
+  geom_histogram(fill="orange", binwidth=3) + 
+  labs(
+    x = "Taxi-out time", 
+    y = "Frequency", 
+    title = "Distribution of taxi-out times"
+  )
+
+combined %>% 
+  group_by(origin) %>% 
+  summarize(avg_taxi_out = mean(time_taxi_out)) %>% 
+  mutate(origin = fct_reorder(origin, avg_taxi_out, .desc = TRUE)) %>% 
+  ggplot(aes(x = origin, y = avg_taxi_out)) + 
+  geom_col(fill = "blue") + 
+  labs(title = "Most delayed airports", x = "Airport code", y = "Taxi-out time")
+```
+
+```{r}
+combined <- 
+  combined %>% 
+  mutate(
+    origin = as.factor(origin),
+    airline = as.factor(carrier_code), 
+    weather_condition = as.factor(weather_condition), 
+    wind_direction = as.factor(wind_direction)
+  ) 
+
+one_hot = 
+  combined %>% 
+  bind_cols(
+    combined %>% 
+      recipe(
+        ~ origin + airline + destination + weather_condition + wind_direction
+      ) %>% 
+      step_dummy(
+        origin, 
+        airline, 
+        destination, 
+        weather_condition,  
+        wind_direction, 
+        one_hot = TRUE
+      ) %>% 
+      prep(training = combined) %>% 
+      bake(new_data = combined)
+  ) %>% 
+  mutate(
+    month = date %>% month(), 
+    hour = time_scheduled_departure %>% hour(), 
+    departure_0_3 = (hour <= 3) %>% as.integer(),
+    departure_3_6 = (hour <= 6 & hour > 3) %>% as.integer(),
+    departure_6_9 = (hour <= 9 & hour > 6) %>% as.integer(),
+    departure_9_12 = (hour <= 12 & hour > 9) %>% as.integer(),
+    departure_12_15 = (hour <= 15 & hour > 12) %>% as.integer(),
+    departure_15_18 = (hour <= 18 & hour > 15) %>% as.integer(),
+    departure_18_21 = (hour <= 21 & hour > 18) %>% as.integer(),
+    departure_21_24 = (hour > 21) %>% as.integer(), 
+  ) %>% 
+  select(
+    departure_delay,
+    time_taxi_out,
+    elapsed_time_scheduled,
+    delay_carrier,
+    delay_weather,
+    delay_nas,
+    delay_security,
+    delay_late_aircraft,
+    humidity,
+    wind_speed_mph,
+    wind_gust_mph,
+    pressure_in,
+    precip_in,
+    starts_with("origin_"),
+    starts_with("airline_"),
+    starts_with("destination_"),
+    starts_with("weather_condition_"),
+    starts_with("wind_direction_")
+  )
+```
+
+```{r}
+one_hot %>% 
+  map(~sum(is.na(.)))
+```
+```{r}
+one_hot %>% 
+  filter(is.na(wind_direction_WSW))
+```
+
+

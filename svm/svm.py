@@ -10,10 +10,10 @@ CSV_PATH = "../../full_data_one_hot.csv"
 def svm_regression(inputs, labels):
     print(inputs.shape)
     # Fit the model
-    labels_train = labels[:4000]
-    labels_test = labels[400000:410000]
-    inputs_train = inputs[:4000]
-    inputs_test = inputs[400000:410000]
+    labels_train = labels[:400000]
+    labels_test = labels[400000:500000]
+    inputs_train = inputs[:400000]
+    inputs_test = inputs[400000:500000]
 
     print("starting to fit")
 
